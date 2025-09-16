@@ -108,14 +108,17 @@ def get_all_user_keys():
     try:
         keys = []
         cursor = 0
-        max_iterations = 5
+        max_iterations = 100  # Увеличили лимит итераций
         
         for i in range(max_iterations):
-            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=50)
+            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=100)  # Увеличили count
             keys.extend(partial_keys)
+            st.sidebar.write(f"Scan iteration {i+1}: found {len(partial_keys)} keys")
+            
             if cursor == 0:
                 break
                 
+        st.sidebar.write(f"Total keys found: {len(keys)}")
         return keys
         
     except Exception as e:
@@ -138,7 +141,7 @@ def get_user_data(key):
         return {'user_id': key, 'error': str(e)}
 
 def process_users_data():
-    """Обработка данных пользователей"""
+    """Обработка данных пользователей - ВСЕХ, а не только 50"""
     st.info("🔄 Loading user data...")
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -150,19 +153,18 @@ def process_users_data():
     
     users_data = []
     
-    # Ограничиваем количество для теста
-    test_keys = keys[:50] if len(keys) > 50 else keys
-    
-    for i, key in enumerate(test_keys):
-        progress = (i + 1) / len(test_keys)
+    # УБИРАЕМ ограничение в 50 ключей - обрабатываем ВСЕ
+    for i, key in enumerate(keys):
+        progress = (i + 1) / len(keys)
         progress_bar.progress(progress)
-        status_text.text(f"Processing user {i+1}/{len(test_keys)}")
+        status_text.text(f"Processing user {i+1}/{len(keys)}")
         
         user_data = get_user_data(key)
         users_data.append(user_data)
         
-        # Небольшая пауза
-        time.sleep(0.01)
+        # Небольшая пауза для избежания перегрузки
+        if i % 100 == 0:  # Пауза каждые 100 пользователей
+            time.sleep(0.1)
     
     progress_bar.empty()
     status_text.empty()
@@ -208,20 +210,36 @@ st.sidebar.write(f"Total users: {len(df)}")
 if not df.empty:
     st.sidebar.write(f"Columns: {list(df.columns)}")
 
+# Дополнительная статистика
+if not df.empty:
+    st.subheader("📊 Детальная статистика")
+    
+    # Статистика по стадиям онбординга
+    if 'onboarding_stage' in df.columns:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Распределение по стадиям онбординга:**")
+            stage_counts = df['onboarding_stage'].value_counts()
+            st.dataframe(stage_counts.reset_index().rename(columns={'index': 'Стадия', 'onboarding_stage': 'Количество'}))
+        
+        with col2:
+            # Воронка онбординга
+            onboarding_stages = ['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 
+                               'current_weight', 'target_weight', 'height', 'daily_calories', 'complete']
+            
+            funnel_data = []
+            for stage in onboarding_stages:
+                count = len(df[df['onboarding_stage'] == stage]) if 'onboarding_stage' in df.columns else 0
+                funnel_data.append({'Стадия': stage, 'Количество': count})
+            
+            funnel_df = pd.DataFrame(funnel_data)
+            fig = px.funnel(funnel_df, x='Количество', y='Стадия', title="Воронка онбординга")
+            st.plotly_chart(fig, use_container_width=True)
+
 # Проверка данных
 st.subheader("📋 Sample Data")
 st.dataframe(df.head(), use_container_width=True)
-
-# Статистика
-st.subheader("📊 Статистика")
-
-if 'onboarding_stage' in df.columns:
-    st.write("**Распределение по стадиям онбординга:**")
-    stage_counts = df['onboarding_stage'].value_counts()
-    for stage, count in stage_counts.items():
-        st.write(f"- {stage}: {count} пользователей")
-else:
-    st.write("Стадия онбординга не найдена в данных")
 
 # Кнопка обновления
 if st.button("🔄 Обновить данные", type="primary"):
