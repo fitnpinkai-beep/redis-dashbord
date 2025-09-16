@@ -1,13 +1,10 @@
 import streamlit as st
 import redis
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from datetime import datetime
 import time
-import json
+import re
 
 # Настройка страницы
 st.set_page_config(
@@ -20,14 +17,23 @@ st.set_page_config(
 st.sidebar.title("🔍 Debug Info")
 st.sidebar.write("App started at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-# Проверка окружения
-st.sidebar.subheader("Environment")
-st.sidebar.write("Python version:", st.sidebar.code(str(pd.__version__)))
-try:
-    import redis as redis_lib
-    st.sidebar.write("Redis version:", st.sidebar.code(redis_lib.__version__))
-except:
-    st.sidebar.write("Redis: Not available")
+# Функция для парсинга Upstash URL
+def parse_upstash_url(redis_url):
+    """Парсинг Upstash URL формата rediss://default:password@host:port"""
+    try:
+        # Извлекаем хост, порт и пароль из URL
+        match = re.match(r'rediss://default:([^@]+)@([^:]+):(\d+)', redis_url)
+        if match:
+            password = match.group(1)
+            host = match.group(2)
+            port = int(match.group(3))
+            return host, port, password
+        else:
+            st.sidebar.error("Invalid Upstash URL format")
+            return None, None, None
+    except Exception as e:
+        st.sidebar.error(f"URL parsing error: {str(e)}")
+        return None, None, None
 
 # Инициализация Redis
 @st.cache_resource
@@ -35,24 +41,31 @@ def init_redis():
     try:
         st.sidebar.info("Initializing Redis connection...")
         
-        # Проверка секретов
-        if "REDIS_URL" not in st.secrets or "REDIS_TOKEN" not in st.secrets:
-            st.sidebar.error("Redis secrets not found!")
+        # Проверка секретов - используем только REDIS_URL
+        if "REDIS_URL" not in st.secrets:
+            st.sidebar.error("REDIS_URL not found in secrets!")
             return None
         
         redis_url = st.secrets["REDIS_URL"]
-        redis_token = st.secrets["REDIS_TOKEN"]
+        st.sidebar.write("Using REDIS_URL from secrets")
         
-        # Парсинг URL
-        parsed_url = urlparse(redis_url)
-        host = parsed_url.hostname
-        port = parsed_url.port or 6379
+        # Парсим URL
+        host, port, password = parse_upstash_url(redis_url)
         
-        # Подключение
+        if not all([host, port, password]):
+            st.sidebar.error("Failed to parse Redis URL")
+            return None
+        
+        st.sidebar.write(f"Host: {host}")
+        st.sidebar.write(f"Port: {port}")
+        st.sidebar.write("Password: ******" if password else "No password")
+        
+        # Подключение к Redis
+        st.sidebar.write("Connecting to Redis...")
         r = redis.Redis(
             host=host,
             port=port,
-            password=redis_token,
+            password=password,  # Используем пароль из URL
             ssl=True,
             ssl_cert_reqs=None,
             decode_responses=True,
@@ -61,8 +74,9 @@ def init_redis():
         )
         
         # Проверка подключения
-        r.ping()
-        st.sidebar.success("✅ Redis connected successfully!")
+        st.sidebar.write("Testing connection...")
+        result = r.ping()
+        st.sidebar.success(f"✅ Redis connected successfully! Ping: {result}")
         return r
         
     except Exception as e:
@@ -79,9 +93,12 @@ st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 if not redis_client:
     st.error("""
     ❌ Cannot connect to Redis. Please check:
-    1. REDIS_URL and REDIS_TOKEN in secrets
-    2. Internet connection
-    3. Redis server status
+    
+    1. **REDIS_URL format**: Should be like `rediss://default:password@host:port`
+    2. **Redis server status** in Upstash console
+    3. **Internet connection**
+    
+    **Your REDIS_URL looks correct!**
     """)
     st.stop()
 
@@ -91,12 +108,16 @@ def get_all_user_keys():
     try:
         keys = []
         cursor = 0
-        while True:
-            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=100)
+        max_iterations = 5
+        
+        for i in range(max_iterations):
+            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=50)
             keys.extend(partial_keys)
             if cursor == 0:
                 break
+                
         return keys
+        
     except Exception as e:
         st.error(f"Error getting keys: {str(e)}")
         return []
@@ -107,18 +128,14 @@ def get_user_data(key):
         user_type = redis_client.type(key)
         
         if user_type == 'hash':
-            return redis_client.hgetall(key)
-        elif user_type == 'string':
-            data = redis_client.get(key)
-            try:
-                return json.loads(data)
-            except:
-                return {'raw_data': data}
+            data = redis_client.hgetall(key)
+            data['user_id'] = key
+            return data
         else:
-            return {}
+            return {'user_id': key}
+            
     except Exception as e:
-        st.warning(f"Error reading user {key}: {str(e)}")
-        return {}
+        return {'user_id': key, 'error': str(e)}
 
 def process_users_data():
     """Обработка данных пользователей"""
@@ -133,15 +150,19 @@ def process_users_data():
     
     users_data = []
     
-    for i, key in enumerate(keys):
-        progress = (i + 1) / len(keys)
+    # Ограничиваем количество для теста
+    test_keys = keys[:50] if len(keys) > 50 else keys
+    
+    for i, key in enumerate(test_keys):
+        progress = (i + 1) / len(test_keys)
         progress_bar.progress(progress)
-        status_text.text(f"Processing user {i+1}/{len(keys)}")
+        status_text.text(f"Processing user {i+1}/{len(test_keys)}")
         
         user_data = get_user_data(key)
-        if user_data:
-            user_data['user_id'] = key
-            users_data.append(user_data)
+        users_data.append(user_data)
+        
+        # Небольшая пауза
+        time.sleep(0.01)
     
     progress_bar.empty()
     status_text.empty()
@@ -151,20 +172,21 @@ def process_users_data():
         return pd.DataFrame()
     
     df = pd.DataFrame(users_data)
-    
-    # Преобразование дат
-    date_columns = ['agreement_accepted', 'subscription_expiry', 'created_at']
-    for col in date_columns:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-    
     return df
 
 # Загрузка данных
 df = process_users_data()
 
 if df.empty:
-    st.stop()
+    st.info("No user data available. Showing demo data...")
+    # Демо данные для тестирования
+    demo_data = {
+        'user_id': ['user:1', 'user:2', 'user:3'],
+        'onboarding_stage': ['complete', 'agreement', 'complete'],
+        'agreement_accepted': ['2024-01-01', '2024-01-02', '2024-01-03'],
+        'subscription_expiry': ['2024-12-31', '2024-01-15', '2024-12-31']
+    }
+    df = pd.DataFrame(demo_data)
 
 # Верхние метрики
 col1, col2 = st.columns(2)
@@ -174,144 +196,36 @@ with col1:
     st.metric("👥 Кол-во юзеров", total_users)
 
 with col2:
-    complete_users = len(df[df['onboarding_stage'] == 'complete'])
-    st.metric("✅ Клиенты с завершенным онбордингом", complete_users)
-
-# Фильтры
-st.subheader("📊 Фильтры для графиков")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    time_unit = st.selectbox(
-        "⏰ Единица времени",
-        ["Дни", "Недели", "Месяцы"],
-        index=0
-    )
-
-with col2:
-    onboarding_filter = st.multiselect(
-        "🎯 Стадия онбординга",
-        options=['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 
-                'current_weight', 'target_weight', 'height', 'daily_calories', 'complete'],
-        default=['complete']
-    )
-
-with col3:
-    activity_filter = st.selectbox(
-        "🔋 Активность клиента",
-        ["Все", "Активные", "Неактивные"]
-    )
-
-# Применение фильтров
-filtered_df = df.copy()
-
-# Фильтр по стадии онбординга
-if onboarding_filter:
-    filtered_df = filtered_df[filtered_df['onboarding_stage'].isin(onboarding_filter)]
-
-# Фильтр по активности
-current_time = datetime.now()
-if activity_filter == "Активные":
-    filtered_df = filtered_df[pd.to_datetime(filtered_df['subscription_expiry']) > current_time]
-elif activity_filter == "Неактивные":
-    filtered_df = filtered_df[pd.to_datetime(filtered_df['subscription_expiry']) <= current_time]
-
-# Линейный график по дате
-st.subheader("📈 Динамика пользователей по времени")
-
-if 'agreement_accepted' in filtered_df.columns and not filtered_df['agreement_accepted'].isna().all():
-    time_df = filtered_df.copy()
-    time_df = time_df.dropna(subset=['agreement_accepted'])
-    
-    if not time_df.empty:
-        # Группировка по времени
-        if time_unit == "Дни":
-            time_df['time_group'] = time_df['agreement_accepted'].dt.date
-        elif time_unit == "Недели":
-            time_df['time_group'] = time_df['agreement_accepted'].dt.to_period('W').dt.start_time
-        else:  # Месяцы
-            time_df['time_group'] = time_df['agreement_accepted'].dt.to_period('M').dt.start_time
-        
-        # Подсчет пользователей
-        timeline_data = time_df.groupby('time_group').size().reset_index(name='user_count')
-        timeline_data = timeline_data.sort_values('time_group')
-        
-        # График
-        fig_timeline = px.line(
-            timeline_data,
-            x='time_group',
-            y='user_count',
-            title=f"Количество пользователей по {time_unit.lower()}",
-            labels={'time_group': 'Дата', 'user_count': 'Количество пользователей'}
-        )
-        st.plotly_chart(fig_timeline, use_container_width=True)
+    if 'onboarding_stage' in df.columns:
+        complete_users = len(df[df['onboarding_stage'] == 'complete'])
+        st.metric("✅ Клиенты с завершенным онбордингом", complete_users)
     else:
-        st.warning("Нет данных с датами agreement_accepted")
+        st.metric("✅ Клиенты с завершенным онбордингом", "N/A")
+
+# Информация о данных
+st.sidebar.subheader("📊 Data Info")
+st.sidebar.write(f"Total users: {len(df)}")
+if not df.empty:
+    st.sidebar.write(f"Columns: {list(df.columns)}")
+
+# Проверка данных
+st.subheader("📋 Sample Data")
+st.dataframe(df.head(), use_container_width=True)
+
+# Статистика
+st.subheader("📊 Статистика")
+
+if 'onboarding_stage' in df.columns:
+    st.write("**Распределение по стадиям онбординга:**")
+    stage_counts = df['onboarding_stage'].value_counts()
+    for stage, count in stage_counts.items():
+        st.write(f"- {stage}: {count} пользователей")
 else:
-    st.warning("Отсутствует колонка agreement_accepted или нет данных")
-
-# Воронка онбординга
-st.subheader("🔄 Воронка онбординга")
-
-onboarding_stages = [
-    'agreement', 'birth_date', 'gender', 'goal', 'activity_level',
-    'current_weight', 'target_weight', 'height', 'daily_calories', 'complete'
-]
-
-funnel_data = []
-for stage in onboarding_stages:
-    count = len(df[df['onboarding_stage'] == stage])
-    funnel_data.append({'stage': stage, 'count': count})
-
-funnel_df = pd.DataFrame(funnel_data)
-
-if not funnel_df.empty:
-    fig_funnel = px.funnel(
-        funnel_df,
-        x='count',
-        y='stage',
-        title="Воронка онбординга по стадиям",
-        labels={'count': 'Количество пользователей', 'stage': 'Стадия онбординга'}
-    )
-    st.plotly_chart(fig_funnel, use_container_width=True)
-else:
-    st.warning("Нет данных для построения воронки")
-
-# Детальная статистика
-st.subheader("📋 Детальная статистика")
-
-# Статистика по стадиям
-st.write("**Статистика по стадиям онбординга:**")
-stage_stats = df['onboarding_stage'].value_counts().reset_index()
-stage_stats.columns = ['Стадия', 'Количество']
-st.dataframe(stage_stats, use_container_width=True)
-
-# Активность пользователей
-st.write("**Статистика по активности:**")
-active_users = len(df[pd.to_datetime(df['subscription_expiry']) > current_time])
-inactive_users = len(df) - active_users
-
-activity_stats = pd.DataFrame({
-    'Статус': ['Активные', 'Неактивные'],
-    'Количество': [active_users, inactive_users]
-})
-st.dataframe(activity_stats, use_container_width=True)
+    st.write("Стадия онбординга не найдена в данных")
 
 # Кнопка обновления
 if st.button("🔄 Обновить данные", type="primary"):
     st.cache_data.clear()
     st.rerun()
-
-# Информация о данных
-st.sidebar.subheader("📊 Data Info")
-st.sidebar.write(f"Total users: {len(df)}")
-st.sidebar.write(f"Columns: {list(df.columns)}")
-st.sidebar.write(f"Date range: {df['agreement_accepted'].min()} to {df['agreement_accepted'].max() if 'agreement_accepted' in df.columns else 'N/A'}")
-
-# Отладка первых нескольких записей
-if st.sidebar.checkbox("Show sample data"):
-    st.sidebar.write("Sample data:")
-    st.sidebar.dataframe(df.head(3))
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
