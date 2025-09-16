@@ -8,7 +8,7 @@ import re
 
 # Настройка страницы
 st.set_page_config(
-    page_title="User Analytics Dashboard",
+    page_title="Долбаебам на понюхать",
     page_icon="📊",
     layout="wide"
 )
@@ -397,3 +397,4 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
