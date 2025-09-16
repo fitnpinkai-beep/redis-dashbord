@@ -87,7 +87,7 @@ def init_redis():
 redis_client = init_redis()
 
 # Основной заголовок
-st.title("📊 User Analytics Dashboard")
+st.title("📊 Долбаебам на понюхать")
 st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if not redis_client:
@@ -397,4 +397,5 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
