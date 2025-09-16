@@ -8,7 +8,7 @@ import re
 
 # Настройка страницы
 st.set_page_config(
-    page_title="Долбаебам на понюхать",
+    page_title="User Analytics Dashboard",
     page_icon="📊",
     layout="wide"
 )
@@ -87,7 +87,7 @@ def init_redis():
 redis_client = init_redis()
 
 # Основной заголовок
-st.title("📊 Долбаебам на понюхать")
+st.title("📊 User Analytics Dashboard")
 st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if not redis_client:
@@ -270,7 +270,7 @@ filtered_df = df.copy()
 if selected_stages:
     filtered_df = filtered_df[filtered_df['onboarding_stage'].isin(selected_stages)]
 
-# Фильтр по активности
+# Фильтр по активности (для детальной статистики)
 current_time = datetime.now()
 if activity_filter == "Активные":
     if 'subscription_expiry' in filtered_df.columns:
@@ -279,7 +279,7 @@ elif activity_filter == "Неактивные":
     if 'subscription_expiry' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['subscription_expiry'] <= current_time]
 
-# Линейный график по дате
+# Линейный график по дате с правильной логикой активности
 st.subheader("📈 Динамика пользователей по времени")
 
 if 'agreement_accepted' in filtered_df.columns and not filtered_df['agreement_accepted'].isna().all():
@@ -295,17 +295,44 @@ if 'agreement_accepted' in filtered_df.columns and not filtered_df['agreement_ac
         else:  # Месяцы
             time_df['time_group'] = time_df['agreement_accepted'].dt.to_period('M').dt.start_time
         
-        # Подсчет пользователей
-        timeline_data = time_df.groupby('time_group').size().reset_index(name='user_count')
-        timeline_data = timeline_data.sort_values('time_group')
+        # Для графика активности считаем пользователей активными на момент time_group
+        timeline_data = []
+        
+        for time_group in sorted(time_df['time_group'].unique()):
+            # Фильтруем пользователей, которые зарегистрировались до или в этот день
+            users_on_date = time_df[time_df['agreement_accepted'] <= pd.to_datetime(time_group)]
+            
+            # Для каждого пользователя проверяем, был ли он активен на эту дату
+            active_count = 0
+            inactive_count = 0
+            
+            for _, user in users_on_date.iterrows():
+                if 'subscription_expiry' in user and pd.notna(user['subscription_expiry']):
+                    # Пользователь активен, если subscription_expiry > текущей даты графика
+                    if user['subscription_expiry'] > pd.to_datetime(time_group):
+                        active_count += 1
+                    else:
+                        inactive_count += 1
+                else:
+                    # Если нет даты истечения, считаем неактивным
+                    inactive_count += 1
+            
+            timeline_data.append({
+                'time_group': time_group,
+                'Активные': active_count,
+                'Неактивные': inactive_count,
+                'Всего': active_count + inactive_count
+            })
+        
+        timeline_df = pd.DataFrame(timeline_data)
         
         # График
         fig_timeline = px.line(
-            timeline_data,
+            timeline_df,
             x='time_group',
-            y='user_count',
-            title=f"Количество пользователей по {time_unit.lower()}",
-            labels={'time_group': 'Дата', 'user_count': 'Количество пользователей'}
+            y=['Активные', 'Неактивные', 'Всего'],
+            title=f"Динамика пользователей по {time_unit.lower()}",
+            labels={'time_group': 'Дата', 'value': 'Количество пользователей', 'variable': 'Статус'}
         )
         st.plotly_chart(fig_timeline, use_container_width=True)
     else:
@@ -313,34 +340,35 @@ if 'agreement_accepted' in filtered_df.columns and not filtered_df['agreement_ac
 else:
     st.warning("Отсутствует колонка agreement_accepted или нет данных")
 
-# Воронка онбординга
+# Воронка онбординга - ПРАВИЛЬНАЯ логика
 st.subheader("🔄 Воронка онбординга")
 
-# Правильная воронка: cumulative sum от complete до agreement
+# Правильный порядок от соглашения до завершения
 onboarding_stages_ordered = [
-    'complete', 'daily_calories', 'height', 'target_weight', 'current_weight',
-    'activity_level', 'goal', 'gender', 'birth_date', 'agreement'
+    'agreement', 'birth_date', 'gender', 'goal', 'activity_level',
+    'current_weight', 'target_weight', 'height', 'daily_calories', 'complete'
 ]
 
 funnel_data = []
 for stage in onboarding_stages_ordered:
-    # Суммируем всех пользователей от текущей стадии до complete
+    # Для каждой стадии считаем ВСЕХ пользователей, которые дошли ДО этой стадии
     stage_index = onboarding_stages_ordered.index(stage)
-    relevant_stages = onboarding_stages_ordered[stage_index:]
+    stages_to_count = onboarding_stages_ordered[:stage_index + 1]  # Все стадии до текущей включительно
     
     if 'onboarding_stage' in df.columns:
-        count = len(df[df['onboarding_stage'].isin(relevant_stages)])
+        # Считаем пользователей, которые находятся на этой ИЛИ ЛЮБОЙ ПРЕДЫДУЩЕЙ стадии
+        count = len(df[df['onboarding_stage'].isin(stages_to_count)])
     else:
         count = 0
         
     funnel_data.append({
         'Стадия': stage_options.get(stage, stage),
         'Количество': count,
-        'Порядок': len(onboarding_stages_ordered) - onboarding_stages_ordered.index(stage)
+        'Порядок': onboarding_stages_ordered.index(stage)
     })
 
 funnel_df = pd.DataFrame(funnel_data)
-funnel_df = funnel_df.sort_values('Порядок', ascending=False)
+funnel_df = funnel_df.sort_values('Порядок')
 
 if not funnel_df.empty:
     fig_funnel = px.funnel(
@@ -370,10 +398,10 @@ with col1:
         st.dataframe(stage_counts_df, use_container_width=True)
 
 with col2:
-    # Статистика по активности
-    st.write("**Статистика по активности:**")
+    # Статистика по активности (текущая)
+    st.write("**Текущая статистика по активности:**")
     if 'subscription_expiry' in df.columns:
-        active_users = len(df[df['subscription_expiry'] > current_time])
+        active_users = len(df[df['subscription_expiry'] > datetime.now()])
         inactive_users = len(df) - active_users
     else:
         active_users = 0
@@ -397,5 +425,3 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
-
-
