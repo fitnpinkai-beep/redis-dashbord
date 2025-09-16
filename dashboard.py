@@ -108,17 +108,14 @@ def get_all_user_keys():
     try:
         keys = []
         cursor = 0
-        max_iterations = 100  # Увеличили лимит итераций
+        max_iterations = 100
         
         for i in range(max_iterations):
-            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=100)  # Увеличили count
+            cursor, partial_keys = redis_client.scan(cursor, match="user:*", count=100)
             keys.extend(partial_keys)
-            st.sidebar.write(f"Scan iteration {i+1}: found {len(partial_keys)} keys")
-            
             if cursor == 0:
                 break
                 
-        st.sidebar.write(f"Total keys found: {len(keys)}")
         return keys
         
     except Exception as e:
@@ -141,7 +138,7 @@ def get_user_data(key):
         return {'user_id': key, 'error': str(e)}
 
 def process_users_data():
-    """Обработка данных пользователей - ВСЕХ, а не только 50"""
+    """Обработка данных пользователей"""
     st.info("🔄 Loading user data...")
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -153,7 +150,6 @@ def process_users_data():
     
     users_data = []
     
-    # УБИРАЕМ ограничение в 50 ключей - обрабатываем ВСЕ
     for i, key in enumerate(keys):
         progress = (i + 1) / len(keys)
         progress_bar.progress(progress)
@@ -162,8 +158,7 @@ def process_users_data():
         user_data = get_user_data(key)
         users_data.append(user_data)
         
-        # Небольшая пауза для избежания перегрузки
-        if i % 100 == 0:  # Пауза каждые 100 пользователей
+        if i % 100 == 0:
             time.sleep(0.1)
     
     progress_bar.empty()
@@ -174,6 +169,17 @@ def process_users_data():
         return pd.DataFrame()
     
     df = pd.DataFrame(users_data)
+    
+    # Преобразование дат
+    date_columns = ['agreement_accepted', 'subscription_expiry', 'created_at']
+    for col in date_columns:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    # Преобразование bot_was_blocked в boolean
+    if 'bot_was_blocked' in df.columns:
+        df['bot_was_blocked'] = df['bot_was_blocked'].astype(str).str.lower().isin(['true', '1', 'yes'])
+    
     return df
 
 # Загрузка данных
@@ -183,15 +189,21 @@ if df.empty:
     st.info("No user data available. Showing demo data...")
     # Демо данные для тестирования
     demo_data = {
-        'user_id': ['user:1', 'user:2', 'user:3'],
-        'onboarding_stage': ['complete', 'agreement', 'complete'],
-        'agreement_accepted': ['2024-01-01', '2024-01-02', '2024-01-03'],
-        'subscription_expiry': ['2024-12-31', '2024-01-15', '2024-12-31']
+        'user_id': ['user:1', 'user:2', 'user:3', 'user:4', 'user:5'],
+        'onboarding_stage': ['complete', 'agreement', 'birth_date', 'complete', 'gender'],
+        'agreement_accepted': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05'],
+        'subscription_expiry': ['2024-12-31', '2024-01-15', '2024-12-31', '2023-12-31', '2024-12-31'],
+        'bot_was_blocked': ['True', 'False', 'True', 'False', 'False']
     }
     df = pd.DataFrame(demo_data)
+    df['agreement_accepted'] = pd.to_datetime(df['agreement_accepted'])
+    df['subscription_expiry'] = pd.to_datetime(df['subscription_expiry'])
+    df['bot_was_blocked'] = df['bot_was_blocked'].astype(bool)
 
 # Верхние метрики
-col1, col2 = st.columns(2)
+st.subheader("📈 Основные метрики")
+
+col1, col2, col3 = st.columns(3)
 
 with col1:
     total_users = len(df)
@@ -204,46 +216,184 @@ with col2:
     else:
         st.metric("✅ Клиенты с завершенным онбордингом", "N/A")
 
-# Информация о данных
-st.sidebar.subheader("📊 Data Info")
-st.sidebar.write(f"Total users: {len(df)}")
-if not df.empty:
-    st.sidebar.write(f"Columns: {list(df.columns)}")
+with col3:
+    if 'bot_was_blocked' in df.columns:
+        blocked_users = len(df[df['bot_was_blocked'] == True])
+        st.metric("🚫 Клиенты забанившие", blocked_users)
+    else:
+        st.metric("🚫 Клиенты забанившие", "N/A")
 
-# Дополнительная статистика
-if not df.empty:
-    st.subheader("📊 Детальная статистика")
+# Фильтры для графиков
+st.subheader("🎛️ Фильтры")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    time_unit = st.selectbox(
+        "⏰ Единица времени",
+        ["Дни", "Недели", "Месяцы"],
+        index=0
+    )
+
+with col2:
+    # Русские названия для стадий
+    stage_options = {
+        'agreement': 'Соглашение',
+        'birth_date': 'Дата рождения', 
+        'gender': 'Пол',
+        'goal': 'Цель',
+        'activity_level': 'Уровень активности',
+        'current_weight': 'Текущий вес',
+        'target_weight': 'Целевой вес', 
+        'height': 'Рост',
+        'daily_calories': 'Калораж',
+        'complete': 'Завершенный онбординг'
+    }
     
-    # Статистика по стадиям онбординга
-    if 'onboarding_stage' in df.columns:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Распределение по стадиям онбординга:**")
-            stage_counts = df['onboarding_stage'].value_counts()
-            st.dataframe(stage_counts.reset_index().rename(columns={'index': 'Стадия', 'onboarding_stage': 'Количество'}))
-        
-        with col2:
-            # Воронка онбординга
-            onboarding_stages = ['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 
-                               'current_weight', 'target_weight', 'height', 'daily_calories', 'complete']
-            
-            funnel_data = []
-            for stage in onboarding_stages:
-                count = len(df[df['onboarding_stage'] == stage]) if 'onboarding_stage' in df.columns else 0
-                funnel_data.append({'Стадия': stage, 'Количество': count})
-            
-            funnel_df = pd.DataFrame(funnel_data)
-            fig = px.funnel(funnel_df, x='Количество', y='Стадия', title="Воронка онбординга")
-            st.plotly_chart(fig, use_container_width=True)
+    selected_stages = st.multiselect(
+        "🎯 Стадия онбординга",
+        options=list(stage_options.keys()),
+        format_func=lambda x: stage_options[x],
+        default=['complete']
+    )
 
-# Проверка данных
-st.subheader("📋 Sample Data")
-st.dataframe(df.head(), use_container_width=True)
+with col3:
+    activity_filter = st.selectbox(
+        "🔋 Активность клиента",
+        ["Все", "Активные", "Неактивные"]
+    )
+
+# Применение фильтров
+filtered_df = df.copy()
+
+# Фильтр по стадии онбординга
+if selected_stages:
+    filtered_df = filtered_df[filtered_df['onboarding_stage'].isin(selected_stages)]
+
+# Фильтр по активности
+current_time = datetime.now()
+if activity_filter == "Активные":
+    if 'subscription_expiry' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['subscription_expiry'] > current_time]
+elif activity_filter == "Неактивные":
+    if 'subscription_expiry' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['subscription_expiry'] <= current_time]
+
+# Линейный график по дате
+st.subheader("📈 Динамика пользователей по времени")
+
+if 'agreement_accepted' in filtered_df.columns and not filtered_df['agreement_accepted'].isna().all():
+    time_df = filtered_df.copy()
+    time_df = time_df.dropna(subset=['agreement_accepted'])
+    
+    if not time_df.empty:
+        # Группировка по времени
+        if time_unit == "Дни":
+            time_df['time_group'] = time_df['agreement_accepted'].dt.date
+        elif time_unit == "Недели":
+            time_df['time_group'] = time_df['agreement_accepted'].dt.to_period('W').dt.start_time
+        else:  # Месяцы
+            time_df['time_group'] = time_df['agreement_accepted'].dt.to_period('M').dt.start_time
+        
+        # Подсчет пользователей
+        timeline_data = time_df.groupby('time_group').size().reset_index(name='user_count')
+        timeline_data = timeline_data.sort_values('time_group')
+        
+        # График
+        fig_timeline = px.line(
+            timeline_data,
+            x='time_group',
+            y='user_count',
+            title=f"Количество пользователей по {time_unit.lower()}",
+            labels={'time_group': 'Дата', 'user_count': 'Количество пользователей'}
+        )
+        st.plotly_chart(fig_timeline, use_container_width=True)
+    else:
+        st.warning("Нет данных с датами agreement_accepted")
+else:
+    st.warning("Отсутствует колонка agreement_accepted или нет данных")
+
+# Воронка онбординга
+st.subheader("🔄 Воронка онбординга")
+
+# Правильная воронка: cumulative sum от complete до agreement
+onboarding_stages_ordered = [
+    'complete', 'daily_calories', 'height', 'target_weight', 'current_weight',
+    'activity_level', 'goal', 'gender', 'birth_date', 'agreement'
+]
+
+funnel_data = []
+for stage in onboarding_stages_ordered:
+    # Суммируем всех пользователей от текущей стадии до complete
+    stage_index = onboarding_stages_ordered.index(stage)
+    relevant_stages = onboarding_stages_ordered[stage_index:]
+    
+    if 'onboarding_stage' in df.columns:
+        count = len(df[df['onboarding_stage'].isin(relevant_stages)])
+    else:
+        count = 0
+        
+    funnel_data.append({
+        'Стадия': stage_options.get(stage, stage),
+        'Количество': count,
+        'Порядок': len(onboarding_stages_ordered) - onboarding_stages_ordered.index(stage)
+    })
+
+funnel_df = pd.DataFrame(funnel_data)
+funnel_df = funnel_df.sort_values('Порядок', ascending=False)
+
+if not funnel_df.empty:
+    fig_funnel = px.funnel(
+        funnel_df,
+        x='Количество',
+        y='Стадия',
+        title="Воронка онбординга (кумулятивная)",
+        labels={'Количество': 'Количество пользователей', 'Стадия': 'Стадия онбординга'}
+    )
+    st.plotly_chart(fig_funnel, use_container_width=True)
+else:
+    st.warning("Нет данных для построения воронки")
+
+# Детальная статистика
+st.subheader("📋 Детальная статистика")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    # Статистика по стадиям
+    if 'onboarding_stage' in df.columns:
+        st.write("**Распределение по стадиям онбординга:**")
+        stage_counts = df['onboarding_stage'].value_counts()
+        stage_counts_df = stage_counts.reset_index()
+        stage_counts_df.columns = ['Стадия', 'Количество']
+        stage_counts_df['Стадия'] = stage_counts_df['Стадия'].map(stage_options).fillna(stage_counts_df['Стадия'])
+        st.dataframe(stage_counts_df, use_container_width=True)
+
+with col2:
+    # Статистика по активности
+    st.write("**Статистика по активности:**")
+    if 'subscription_expiry' in df.columns:
+        active_users = len(df[df['subscription_expiry'] > current_time])
+        inactive_users = len(df) - active_users
+    else:
+        active_users = 0
+        inactive_users = len(df)
+    
+    activity_stats = pd.DataFrame({
+        'Статус': ['Активные', 'Неактивные'],
+        'Количество': [active_users, inactive_users]
+    })
+    st.dataframe(activity_stats, use_container_width=True)
 
 # Кнопка обновления
 if st.button("🔄 Обновить данные", type="primary"):
     st.cache_data.clear()
     st.rerun()
+
+# Информация о данных
+st.sidebar.subheader("📊 Data Info")
+st.sidebar.write(f"Total users: {len(df)}")
+if not df.empty and 'onboarding_stage' in df.columns:
+    st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
