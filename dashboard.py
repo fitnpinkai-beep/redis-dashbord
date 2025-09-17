@@ -279,7 +279,7 @@ elif activity_filter == "Неактивные":
     if 'subscription_expiry' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['subscription_expiry'] <= current_time]
 
-# Воронка онбординга - ИСКЛЮЧАЮЩАЯ логика
+# Воронка онбординга - КУМУЛЯТИВНАЯ логика
 st.subheader("🔄 Воронка онбординга")
 
 # Правильный порядок от соглашения до завершения
@@ -289,87 +289,22 @@ onboarding_stages_ordered = [
 ]
 
 funnel_data = []
-previous_stages_users = set()
 
-for stage in onboarding_stages_ordered:
+for i, stage in enumerate(onboarding_stages_ordered):
     if 'onboarding_stage' in df.columns:
-        # Для agreement: все пользователи с agreement
-        if stage == 'agreement':
-            stage_users = set(df[df['onboarding_stage'] == 'agreement']['user_id'])
-            count = len(stage_users)
+        # Для каждой стадии считаем ВСЕХ пользователей на этой И ПОСЛЕДУЮЩИХ стадиях
+        stages_to_include = onboarding_stages_ordered[i:]  # Все стадии от текущей до complete
         
-        # Для birth_date: все с birth_date, но без agreement
-        elif stage == 'birth_date':
-            agreement_users = set(df[df['onboarding_stage'] == 'agreement']['user_id'])
-            birth_date_users = set(df[df['onboarding_stage'] == 'birth_date']['user_id'])
-            stage_users = birth_date_users - agreement_users
-            count = len(stage_users)
-        
-        # Для gender: все с gender, но без agreement и birth_date
-        elif stage == 'gender':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date'])]['user_id'])
-            gender_users = set(df[df['onboarding_stage'] == 'gender']['user_id'])
-            stage_users = gender_users - prev_users
-            count = len(stage_users)
-        
-        # Для goal: все с goal, но без предыдущих стадий
-        elif stage == 'goal':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender'])]['user_id'])
-            goal_users = set(df[df['onboarding_stage'] == 'goal']['user_id'])
-            stage_users = goal_users - prev_users
-            count = len(stage_users)
-        
-        # Для activity_level: все с activity_level, но без предыдущих стадий
-        elif stage == 'activity_level':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal'])]['user_id'])
-            activity_users = set(df[df['onboarding_stage'] == 'activity_level']['user_id'])
-            stage_users = activity_users - prev_users
-            count = len(stage_users)
-        
-        # Для current_weight: все с current_weight, но без предыдущих стадий
-        elif stage == 'current_weight':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal', 'activity_level'])]['user_id'])
-            weight_users = set(df[df['onboarding_stage'] == 'current_weight']['user_id'])
-            stage_users = weight_users - prev_users
-            count = len(stage_users)
-        
-        # Для target_weight: все с target_weight, но без предыдущих стадий
-        elif stage == 'target_weight':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 'current_weight'])]['user_id'])
-            target_users = set(df[df['onboarding_stage'] == 'target_weight']['user_id'])
-            stage_users = target_users - prev_users
-            count = len(stage_users)
-        
-        # Для height: все с height, но без предыдущих стадий
-        elif stage == 'height':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 'current_weight', 'target_weight'])]['user_id'])
-            height_users = set(df[df['onboarding_stage'] == 'height']['user_id'])
-            stage_users = height_users - prev_users
-            count = len(stage_users)
-        
-        # Для daily_calories: все с daily_calories, но без предыдущих стадий
-        elif stage == 'daily_calories':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 'current_weight', 'target_weight', 'height'])]['user_id'])
-            calories_users = set(df[df['onboarding_stage'] == 'daily_calories']['user_id'])
-            stage_users = calories_users - prev_users
-            count = len(stage_users)
-        
-        # Для complete: все с complete, но без предыдущих стадий
-        elif stage == 'complete':
-            prev_users = set(df[df['onboarding_stage'].isin(['agreement', 'birth_date', 'gender', 'goal', 'activity_level', 'current_weight', 'target_weight', 'height', 'daily_calories'])]['user_id'])
-            complete_users = set(df[df['onboarding_stage'] == 'complete']['user_id'])
-            stage_users = complete_users - prev_users
-            count = len(stage_users)
+        # Получаем всех пользователей на этих стадиях
+        stage_users = set(df[df['onboarding_stage'].isin(stages_to_include)]['user_id'])
+        count = len(stage_users)
     else:
         count = 0
-        stage_users = set()
-    
-    previous_stages_users.update(stage_users)
     
     funnel_data.append({
         'Стадия': stage_options.get(stage, stage),
         'Количество': count,
-        'Порядок': onboarding_stages_ordered.index(stage)
+        'Порядок': i
     })
 
 funnel_df = pd.DataFrame(funnel_data)
@@ -380,18 +315,19 @@ if not funnel_df.empty:
         funnel_df,
         x='Количество',
         y='Стадия',
-        title="Воронка онбординга (исключающая)",
+        title="Воронка онбординга (кумулятивная)",
         labels={'Количество': 'Количество пользователей', 'Стадия': 'Стадия онбординга'}
     )
     st.plotly_chart(fig_funnel, use_container_width=True)
     
     # Также покажем таблицу с данными для ясности
     st.write("**Детализация воронки:**")
-    st.dataframe(funnel_df[['Стадия', 'Количество']], use_container_width=True)
+    display_df = funnel_df[['Стадия', 'Количество']].copy()
+    display_df['Процент'] = (display_df['Количество'] / display_df['Количество'].iloc[0] * 100).round(1)
+    display_df['Процент'] = display_df['Процент'].astype(str) + '%'
+    st.dataframe(display_df, use_container_width=True)
 else:
-    st.warning("Нет данных для построения воронки")
-
-# Детальная статистика
+    st.warning("Нет данных для построения воронки")# Детальная статистика
 st.subheader("📋 Детальная статистика")
 
 col1, col2 = st.columns(2)
@@ -434,6 +370,7 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
 
 
