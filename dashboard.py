@@ -328,9 +328,9 @@ if not funnel_df.empty:
     display_df['Процент'] = display_df['Процент'].astype(str) + '%'
     st.dataframe(display_df, use_container_width=True)
 else:
-    st.warning("Нет данных для построения воронки")  # ЗДЕСЬ БЫЛА ОШИБКА - ПРОПУЩЕНА ЗАКРЫВАЮЩАЯ СКОБКА
+    st.warning("Нет данных для построения воронки")
 
-# Детальная статистика  # ЭТА СТРОКА ДОЛЖНА БЫТЬ С НОВОЙ СТРОКИ БЕЗ КОММЕНТАРИЕВ
+# Детальная статистика
 st.subheader("📋 Детальная статистика")
 
 col1, col2 = st.columns(2)
@@ -373,6 +373,7 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
 
 
