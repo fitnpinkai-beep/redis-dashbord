@@ -171,7 +171,7 @@ def process_users_data():
     df = pd.DataFrame(users_data)
     
     # Преобразование дат - пробуем разные возможные колонки
-    possible_date_columns = ['agreement', 'agreement_accepted', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
+    possible_date_columns = ['agreement', 'agreement', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
     for col in possible_date_columns:
         if col in df.columns:
             try:
@@ -210,7 +210,7 @@ st.sidebar.write(list(df.columns))
 
 # Поиск колонки с датами для графика
 date_column = None
-possible_date_columns = ['agreement', 'agreement_accepted', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
+possible_date_columns = ['agreement', 'agreement', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
 for col in possible_date_columns:
     if col in df.columns and not df[col].isna().all():
         date_column = col
@@ -452,3 +452,4 @@ if date_column:
     st.sidebar.write(f"Date column: {date_column}")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
