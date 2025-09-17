@@ -171,7 +171,7 @@ def process_users_data():
     df = pd.DataFrame(users_data)
     
     # Преобразование дат
-    date_columns = ['agreement_accepted', 'subscription_expiry', 'created_at']
+    date_columns = ['agreement', 'subscription_expiry', 'created_at']
     for col in date_columns:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -191,12 +191,12 @@ if df.empty:
     demo_data = {
         'user_id': ['user:1', 'user:2', 'user:3', 'user:4', 'user:5'],
         'onboarding_stage': ['complete', 'agreement', 'birth_date', 'complete', 'gender'],
-        'agreement_accepted': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05'],
+        'agreement': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05'],
         'subscription_expiry': ['2024-12-31', '2024-01-15', '2024-12-31', '2023-12-31', '2024-12-31'],
         'bot_was_blocked': ['True', 'False', 'True', 'False', 'False']
     }
     df = pd.DataFrame(demo_data)
-    df['agreement_accepted'] = pd.to_datetime(df['agreement_accepted'])
+    df['agreement'] = pd.to_datetime(df['agreement'])
     df['subscription_expiry'] = pd.to_datetime(df['subscription_expiry'])
     df['bot_was_blocked'] = df['bot_was_blocked'].astype(bool)
 
@@ -434,5 +434,6 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
 
