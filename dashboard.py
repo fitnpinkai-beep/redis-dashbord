@@ -170,11 +170,15 @@ def process_users_data():
     
     df = pd.DataFrame(users_data)
     
-    # Преобразование дат
-    date_columns = ['agreement', 'subscription_expiry', 'created_at']
-    for col in date_columns:
+    # Преобразование дат - пробуем разные возможные колонки
+    possible_date_columns = ['agreement', 'agreement_accepted', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
+    for col in possible_date_columns:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
+            try:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+                st.sidebar.write(f"✅ Converted {col} to datetime")
+            except:
+                st.sidebar.write(f"❌ Could not convert {col} to datetime")
     
     # Преобразование bot_was_blocked в boolean
     if 'bot_was_blocked' in df.columns:
@@ -199,6 +203,20 @@ if df.empty:
     df['agreement'] = pd.to_datetime(df['agreement'])
     df['subscription_expiry'] = pd.to_datetime(df['subscription_expiry'])
     df['bot_was_blocked'] = df['bot_was_blocked'].astype(bool)
+
+# Покажем доступные колонки для отладки
+st.sidebar.subheader("📊 Available Columns")
+st.sidebar.write(list(df.columns))
+
+# Поиск колонки с датами для графика
+date_column = None
+possible_date_columns = ['agreement', 'agreement_accepted', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
+for col in possible_date_columns:
+    if col in df.columns and not df[col].isna().all():
+        date_column = col
+        break
+
+st.sidebar.write(f"📅 Date column found: {date_column}")
 
 # Верхние метрики
 st.subheader("📈 Основные метрики")
@@ -264,7 +282,6 @@ with col3:
     )
 
 # Применение фильтров
-# Применение фильтров
 filtered_df = df.copy()
 
 # Фильтр по стадии онбординга
@@ -280,21 +297,21 @@ elif activity_filter == "Неактивные":
     if 'subscription_expiry' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['subscription_expiry'] <= current_time]
 
-# Линейный график по дате agreement_accepted
+# Линейный график по дате
 st.subheader("📈 Динамика пользователей по времени")
 
-if 'agreement' in filtered_df.columns and not filtered_df['agreement'].isna().all():
+if date_column and not df[date_column].isna().all():
     time_df = filtered_df.copy()
-    time_df = time_df.dropna(subset=['agreement'])
+    time_df = time_df.dropna(subset=[date_column])
     
     if not time_df.empty:
         # Группировка по времени
         if time_unit == "Дни":
-            time_df['time_group'] = time_df['agreement'].dt.date
+            time_df['time_group'] = time_df[date_column].dt.date
         elif time_unit == "Недели":
-            time_df['time_group'] = time_df['agreement'].dt.to_period('W').dt.start_time
+            time_df['time_group'] = time_df[date_column].dt.to_period('W').dt.start_time
         else:  # Месяцы
-            time_df['time_group'] = time_df['agreement'].dt.to_period('M').dt.start_time
+            time_df['time_group'] = time_df[date_column].dt.to_period('M').dt.start_time
         
         # Подсчет пользователей по датам
         timeline_data = time_df.groupby('time_group').size().reset_index(name='user_count')
@@ -310,14 +327,26 @@ if 'agreement' in filtered_df.columns and not filtered_df['agreement'].isna().al
         )
         st.plotly_chart(fig_timeline, use_container_width=True)
         
-        # Дополнительная информация
-        st.write(f"**Всего записей на графике:** {len(timeline_data)}")
+        st.info(f"📊 Используется колонка: **{date_column}**")
         st.write(f"**Период:** {timeline_data['time_group'].min()} - {timeline_data['time_group'].max()}")
+        st.write(f"**Всего точек данных:** {len(timeline_data)}")
         
     else:
-        st.warning("Нет данных с датами agreement")
+        st.warning(f"Нет данных в колонке {date_column}")
 else:
-    st.warning("Отсутствует колонка agreement или нет данных")
+    st.warning("Не найдена подходящая колонка с датами для построения графика")
+    st.write("**Доступные колонки:**", list(df.columns))
+    
+    # Создадим демо-график для примера
+    st.info("📈 Демо-график (для примера):")
+    demo_dates = pd.date_range(start='2024-01-01', end=datetime.now(), freq='D')
+    demo_data = pd.DataFrame({
+        'time_group': demo_dates,
+        'user_count': [i * 10 for i in range(len(demo_dates))]
+    })
+    fig_demo = px.line(demo_data, x='time_group', y='user_count', 
+                      title="Демо: Динамика пользователей (пример)")
+    st.plotly_chart(fig_demo, use_container_width=True)
 
 # Воронка онбординга - КУМУЛЯТИВНАЯ логика
 st.subheader("🔄 Воронка онбординга")
@@ -419,13 +448,7 @@ st.sidebar.subheader("📊 Data Info")
 st.sidebar.write(f"Total users: {len(df)}")
 if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
+if date_column:
+    st.sidebar.write(f"Date column: {date_column}")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
-
-
-
-
-
-
-
-
