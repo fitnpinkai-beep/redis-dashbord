@@ -340,6 +340,53 @@ else:
     st.warning("Нет данных для построения воронки")
 
 # Детальная статистика
+# Линейный график по дате agreement
+st.subheader("📈 Динамика регистраций по времени")
+
+if 'agreement' in df.columns and not df['agreement'].isna().all():
+    # Создаем копию данных для графика
+    timeline_df = df.copy().dropna(subset=['agreement'])
+    
+    if not timeline_df.empty:
+        # Группировка по выбранной единице времени
+        if time_unit == "Дни":
+            timeline_df['time_group'] = timeline_df['agreement'].dt.date
+        elif time_unit == "Недели":
+            timeline_df['time_group'] = timeline_df['agreement'].dt.to_period('W').dt.start_time
+        else:  # Месяцы
+            timeline_df['time_group'] = timeline_df['agreement'].dt.to_period('M').dt.start_time
+        
+        # Группируем по дате и стадии онбординга
+        timeline_data = timeline_df.groupby(['time_group', 'onboarding_stage']).size().reset_index(name='count')
+        
+        # Создаем сводную таблицу
+        pivot_data = timeline_data.pivot_table(
+            index='time_group', 
+            columns='onboarding_stage', 
+            values='count', 
+            fill_value=0
+        ).reset_index()
+        
+        # Строим линейный график
+        fig_timeline = px.line(
+            pivot_data,
+            x='time_group',
+            y=pivot_data.columns[1:],  # Все колонки кроме time_group
+            title=f"Динамика регистраций по {time_unit.lower()}",
+            labels={'time_group': 'Дата', 'value': 'Количество регистраций', 'variable': 'Стадия онбординга'}
+        )
+        st.plotly_chart(fig_timeline, use_container_width=True)
+        
+        # Также покажем сырые данные
+        with st.expander("📊 Данные для графика"):
+            st.dataframe(timeline_data, use_container_width=True)
+            
+    else:
+        st.warning("Нет данных с датами соглашения")
+else:
+    st.warning("Отсутствует колонка agreement или нет данных")
+
+# Детальная статистика
 st.subheader("📋 Детальная статистика")
 
 col1, col2 = st.columns(2)
@@ -382,6 +429,7 @@ if not df.empty and 'onboarding_stage' in df.columns:
     st.sidebar.write(f"Stages: {df['onboarding_stage'].nunique()} unique")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
 
 
