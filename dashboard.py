@@ -171,7 +171,7 @@ def process_users_data():
     df = pd.DataFrame(users_data)
     
     # Преобразование дат - пробуем разные возможные колонки
-    possible_date_columns = ['agreement', 'agreement', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
+    possible_date_columns = ['agreement_accepted', 'agreement', 'created_at', 'date', 'timestamp', 'registered_at', 'start_date']
     for col in possible_date_columns:
         if col in df.columns:
             try:
@@ -452,4 +452,5 @@ if date_column:
     st.sidebar.write(f"Date column: {date_column}")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
