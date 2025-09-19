@@ -636,46 +636,91 @@ def calculate_token_costs(event):
     
     # Стоимость Redis операций
     if 'redis_ops' in event:
-        costs['redis_ops'] = event['redis_ops'] * 0.0000002
+        # Преобразуем в число, если это строка
+        redis_ops_value = event['redis_ops']
+        if isinstance(redis_ops_value, str):
+            try:
+                redis_ops_value = float(redis_ops_value)
+            except:
+                redis_ops_value = 0
+        costs['redis_ops'] = redis_ops_value * 0.0000002
     
     # Стоимость поисковых операций
     search_keys = ['yandex_searches', 'web_searches', 'google_searches']
     for key in search_keys:
         if key in event:
-            costs['redis_ops'] += event[key] * 0.0000002
+            search_value = event[key]
+            if isinstance(search_value, str):
+                try:
+                    search_value = float(search_value)
+                except:
+                    search_value = 0
+            costs['redis_ops'] += search_value * 0.0000002
     
     # Стоимость OpenAI токенов
     if 'openai_usage' in event and event['openai_usage']:
-        for usage in event['openai_usage']:
-            # Audio tokens
-            audio_tokens = 0
-            if 'completion_tokens_details' in usage and 'audio_tokens' in usage['completion_tokens_details']:
-                audio_tokens += usage['completion_tokens_details']['audio_tokens']
-            if 'prompt_tokens_details' in usage and 'audio_tokens' in usage['prompt_tokens_details']:
-                audio_tokens += usage['prompt_tokens_details']['audio_tokens']
-            costs['audio_tokens'] += audio_tokens * 0.00000025
-            
-            # Cached tokens
-            cached_tokens = 0
-            if 'prompt_tokens_details' in usage and 'cached_tokens' in usage['prompt_tokens_details']:
-                cached_tokens = usage['prompt_tokens_details']['cached_tokens']
-            costs['cached_tokens'] += cached_tokens * 0.00000001
-            
-            # Input tokens (prompt_tokens - audio_tokens - cached_tokens)
-            prompt_tokens = usage.get('prompt_tokens', 0)
-            input_tokens = prompt_tokens - audio_tokens - cached_tokens
-            costs['input_tokens'] += max(0, input_tokens) * 0.0000004
-            
-            # Output tokens (completion_tokens - audio_tokens)
-            completion_tokens = usage.get('completion_tokens', 0)
-            output_tokens = completion_tokens - audio_tokens
-            costs['output_tokens'] += max(0, output_tokens) * 0.0000016
-    
-    costs['total'] = sum(costs.values())
-    return costs
+        # Проверяем, является ли openai_usage строкой (JSON)
+        openai_usage = event['openai_usage']
+        if isinstance(openai_usage, str):
+            try:
+                openai_usage = json.loads(openai_usage)
+            except:
+                openai_usage = []
         
-        # ... остальной код ...
-# Обновленная функция обработки с проверкой типа данных
+        if isinstance(openai_usage, list):
+            for usage in openai_usage:
+                # Проверяем, является ли usage строкой (JSON)
+                if isinstance(usage, str):
+                    try:
+                        usage = json.loads(usage)
+                    except:
+                        continue
+                
+                if isinstance(usage, dict):
+                    # Audio tokens
+                    audio_tokens = 0
+                    completion_details = usage.get('completion_tokens_details', {})
+                    prompt_details = usage.get('prompt_tokens_details', {})
+                    
+                    if isinstance(completion_details, str):
+                        try:
+                            completion_details = json.loads(completion_details)
+                        except:
+                            completion_details = {}
+                    if isinstance(prompt_details, str):
+                        try:
+                            prompt_details = json.loads(prompt_details)
+                        except:
+                            prompt_details = {}
+                    
+                    audio_tokens += completion_details.get('audio_tokens', 0)
+                    audio_tokens += prompt_details.get('audio_tokens', 0)
+                    costs['audio_tokens'] += audio_tokens * 0.00000025
+                    
+                    # Cached tokens
+                    cached_tokens = prompt_details.get('cached_tokens', 0)
+                    costs['cached_tokens'] += cached_tokens * 0.00000001
+                    
+                    # Input tokens (prompt_tokens - audio_tokens - cached_tokens)
+                    prompt_tokens = float(usage.get('prompt_tokens', 0))
+                    input_tokens = prompt_tokens - audio_tokens - cached_tokens
+                    costs['input_tokens'] += max(0, input_tokens) * 0.0000004
+                    
+                    # Output tokens (completion_tokens - audio_tokens)
+                    completion_tokens = float(usage.get('completion_tokens', 0))
+                    output_tokens = completion_tokens - audio_tokens
+                    costs['output_tokens'] += max(0, output_tokens) * 0.0000016
+    
+    costs['total'] = sum([
+        costs['redis_ops'], 
+        costs['input_tokens'], 
+        costs['output_tokens'], 
+        costs['audio_tokens'], 
+        costs['cached_tokens']
+    ])
+    
+    return costs
+
 def process_events_data():
     """Обработка данных событий"""
     if not redis_events_client:
@@ -735,108 +780,108 @@ def process_events_data():
         st.error(f"Error creating events DataFrame: {str(e)}")
         st.write("Raw events data sample:", events_data[:3])
         return pd.DataFrame()
-        
+
 # Загрузка данных событий и анализ стоимости
-# if redis_events_client:
-#     events_df = process_events_data()
-    
-#     if not events_df.empty:
-#         st.subheader("💰 Анализ стоимости токенов")
-        
-#         # Расчет стоимости
-#         costs_data = []
-#         for _, event_row in events_df.iterrows():
-#             # Преобразуем Series в словарь
-#             event = event_row.to_dict()
-#             costs = calculate_token_costs(event)
-#             costs['timestamp'] = event.get('timestamp')
-#             costs['event_id'] = event.get('event_id')
-#             costs['user_id'] = event.get('user_id')
-#             costs_data.append(costs)
-        
-#         costs_df = pd.DataFrame(costs_data)
-        
-#         # Преобразование timestamp
-#         if 'timestamp' in costs_df.columns:
-#             costs_df['timestamp'] = pd.to_datetime(costs_df['timestamp'], errors='coerce')
-#             costs_df = costs_df.dropna(subset=['timestamp'])
-        
-#         if not costs_df.empty:
-#             # График стоимости токенов
-#             col1, col2 = st.columns(2)
-#             with col1:
-#                 cost_time_unit = st.selectbox(
-#                     "⏰ Единица времени для стоимости",
-#                     ["Дни", "Недели", "Месяцы"],
-#                     index=0
-#                 )
-            
-#             # Группировка по времени
-#             if cost_time_unit == "Дни":
-#                 costs_df['time_group'] = costs_df['timestamp'].dt.date
-#             elif cost_time_unit == "Недели":
-#                 costs_df['time_group'] = costs_df['timestamp'].dt.to_period('W').dt.start_time
-#             else:
-#                 costs_df['time_group'] = costs_df['timestamp'].dt.to_period('M').dt.start_time
-            
-#             # Агрегация
-#             grouped_costs = costs_df.groupby('time_group').agg({
-#                 'redis_ops': 'sum',
-#                 'input_tokens': 'sum',
-#                 'output_tokens': 'sum',
-#                 'audio_tokens': 'sum',
-#                 'cached_tokens': 'sum',
-#                 'total': 'sum'
-#             }).reset_index()
-            
-#             # Stacked bar chart
-#             fig_costs = px.bar(
-#                 grouped_costs,
-#                 x='time_group',
-#                 y=['redis_ops', 'input_tokens', 'output_tokens', 'audio_tokens', 'cached_tokens'],
-#                 title=f"Стоимость токенов по {cost_time_unit.lower()} ($)",
-#                 labels={'value': 'Стоимость ($)', 'time_group': 'Дата', 'variable': 'Тип токенов'}
-#             )
-            
-#             st.plotly_chart(fig_costs, use_container_width=True)
-            
-#             # Общая статистика
-#             total_costs = {
-#                 'Redis Ops': costs_df['redis_ops'].sum(),
-#                 'Input Tokens': costs_df['input_tokens'].sum(),
-#                 'Output Tokens': costs_df['output_tokens'].sum(),
-#                 'Audio Tokens': costs_df['audio_tokens'].sum(),
-#                 'Cached Tokens': costs_df['cached_tokens'].sum(),
-#                 'Total Cost': costs_df['total'].sum()
-#             }
-            
-#             st.write("**Общая стоимость:**")
-#             for key, value in total_costs.items():
-#                 st.write(f"- {key}: ${value:.6f}")
-                
-#         else:
-#             st.warning("Нет данных о стоимости для построения графика")
-#     else:
-#         st.info("Данные событий не найдены")
-# else:
-#     st.info("Подключение к базе событий не настроено")
 if redis_events_client:
     events_df = process_events_data()
     
     if not events_df.empty:
         st.subheader("💰 Анализ стоимости токенов")
         
+        # Покажем структуру данных для отладки
+        st.sidebar.write("**Events DataFrame Columns:**", list(events_df.columns))
+        st.sidebar.write("**Events DataFrame Shape:**", events_df.shape)
+        
         # Расчет стоимости
         costs_data = []
         for _, event_row in events_df.iterrows():
             # Преобразуем Series в словарь
             event = event_row.to_dict()
-            costs = calculate_token_costs(event)
-            costs['timestamp'] = event.get('timestamp')
-            costs['event_id'] = event.get('event_id')
-            costs['user_id'] = event.get('user_id')
-            costs_data.append(costs)
+            try:
+                costs = calculate_token_costs(event)
+                costs['timestamp'] = event.get('timestamp')
+                costs['event_id'] = event.get('event_id')
+                costs['user_id'] = event.get('user_id')
+                costs_data.append(costs)
+            except Exception as e:
+                st.sidebar.warning(f"Error calculating costs for event: {str(e)}")
+                continue
+        
+        if costs_data:
+            costs_df = pd.DataFrame(costs_data)
+            
+            # Преобразование timestamp
+            if 'timestamp' in costs_df.columns:
+                costs_df['timestamp'] = pd.to_datetime(costs_df['timestamp'], errors='coerce')
+                costs_df = costs_df.dropna(subset=['timestamp'])
+            
+            if not costs_df.empty:
+                # График стоимости токенов
+                col1, col2 = st.columns(2)
+                with col1:
+                    cost_time_unit = st.selectbox(
+                        "⏰ Единица времени для стоимости",
+                        ["Дни", "Недели", "Месяцы"],
+                        index=0
+                    )
+                
+                # Группировка по времени
+                if cost_time_unit == "Дни":
+                    costs_df['time_group'] = costs_df['timestamp'].dt.date
+                elif cost_time_unit == "Недели":
+                    costs_df['time_group'] = costs_df['timestamp'].dt.to_period('W').dt.start_time
+                else:
+                    costs_df['time_group'] = costs_df['timestamp'].dt.to_period('M').dt.start_time
+                
+                # Агрегация
+                grouped_costs = costs_df.groupby('time_group').agg({
+                    'redis_ops': 'sum',
+                    'input_tokens': 'sum',
+                    'output_tokens': 'sum',
+                    'audio_tokens': 'sum',
+                    'cached_tokens': 'sum',
+                    'total': 'sum'
+                }).reset_index()
+                
+                # Stacked bar chart
+                fig_costs = px.bar(
+                    grouped_costs,
+                    x='time_group',
+                    y=['redis_ops', 'input_tokens', 'output_tokens', 'audio_tokens', 'cached_tokens'],
+                    title=f"Стоимость токенов по {cost_time_unit.lower()} ($)",
+                    labels={'value': 'Стоимость ($)', 'time_group': 'Дата', 'variable': 'Тип токенов'},
+                    color_discrete_map={
+                        'redis_ops': '#FF6B6B',
+                        'input_tokens': '#4ECDC4', 
+                        'output_tokens': '#45B7D1',
+                        'audio_tokens': '#F9A826',
+                        'cached_tokens': '#6A0572'
+                    }
+                )
+                
+                st.plotly_chart(fig_costs, use_container_width=True)
+                
+                # Общая статистика
+                total_costs = {
+                    'Redis Ops': f"${costs_df['redis_ops'].sum():.6f}",
+                    'Input Tokens': f"${costs_df['input_tokens'].sum():.6f}",
+                    'Output Tokens': f"${costs_df['output_tokens'].sum():.6f}",
+                    'Audio Tokens': f"${costs_df['audio_tokens'].sum():.6f}",
+                    'Cached Tokens': f"${costs_df['cached_tokens'].sum():.6f}",
+                    'Total Cost': f"${costs_df['total'].sum():.6f}"
+                }
+                
+                st.write("**Общая стоимость:**")
+                for key, value in total_costs.items():
+                    st.write(f"- {key}: {value}")
+                    
+            else:
+                st.warning("Нет данных о стоимости для построения графика")
+        else:
+            st.warning("Не удалось рассчитать стоимость для событий")
+    else:
+        st.info("Данные событий не найдены")
+else:
+    st.info("Подключение к базе событий не настроено")
+
 st.sidebar.success("✅ Dashboard loaded successfully!")
-
-
-
