@@ -685,6 +685,7 @@ def process_events_data():
         return pd.DataFrame()
 
 # Загрузка данных событий и анализ стоимости
+# Загрузка данных событий и анализ стоимости
 if redis_events_client:
     events_df = process_events_data()
     
@@ -693,7 +694,9 @@ if redis_events_client:
         
         # Расчет стоимости
         costs_data = []
-        for _, event in events_df.iterrows():
+        for _, event_row in events_df.iterrows():
+            # Преобразуем Series в словарь
+            event = event_row.to_dict()
             costs = calculate_token_costs(event)
             costs['timestamp'] = event.get('timestamp')
             costs['event_id'] = event.get('event_id')
@@ -768,4 +771,5 @@ else:
     st.info("Подключение к базе событий не настроено")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
 
