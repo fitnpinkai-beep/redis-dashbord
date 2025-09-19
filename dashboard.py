@@ -408,6 +408,7 @@ else:
     st.warning("Нет данных для построения воронки")
 
 # Детальная статистика
+# Детальная статистика
 st.subheader("📋 Детальная статистика")
 
 col1, col2 = st.columns(2)
@@ -426,16 +427,34 @@ with col2:
     # Статистика по активности (текущая)
     st.write("**Текущая статистика по активности:**")
     if 'subscription_expiry' in df.columns:
-        active_users = len(df[df['subscription_expiry'] > datetime.now()])
-        inactive_users = len(df) - active_users
+        try:
+            # Преобразуем subscription_expiry в datetime если это еще не сделано
+            if df['subscription_expiry'].dtype != 'datetime64[ns]':
+                df['subscription_expiry'] = pd.to_datetime(df['subscription_expiry'], errors='coerce')
+            
+            # Фильтруем только валидные даты
+            valid_subscriptions = df.dropna(subset=['subscription_expiry'])
+            active_users = len(valid_subscriptions[valid_subscriptions['subscription_expiry'] > datetime.now()])
+            inactive_users = len(valid_subscriptions) - active_users
+            
+            activity_stats = pd.DataFrame({
+                'Статус': ['Активные', 'Неактивные', 'Без даты истечения'],
+                'Количество': [active_users, inactive_users, len(df) - len(valid_subscriptions)]
+            })
+        except Exception as e:
+            st.error(f"Ошибка при обработке subscription_expiry: {str(e)}")
+            activity_stats = pd.DataFrame({
+                'Статус': ['Ошибка обработки дат'],
+                'Количество': [len(df)]
+            })
     else:
         active_users = 0
         inactive_users = len(df)
+        activity_stats = pd.DataFrame({
+            'Статус': ['Активные', 'Неактивные'],
+            'Количество': [active_users, inactive_users]
+        })
     
-    activity_stats = pd.DataFrame({
-        'Статус': ['Активные', 'Неактивные'],
-        'Количество': [active_users, inactive_users]
-    })
     st.dataframe(activity_stats, use_container_width=True)
 
 # Кнопка обновления
@@ -452,3 +471,4 @@ if date_column:
     st.sidebar.write(f"Date column: {date_column}")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
