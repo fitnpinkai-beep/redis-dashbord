@@ -472,3 +472,227 @@ if date_column:
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
 
+# Добавим после основного кода новую секцию для анализа стоимости
+
+# Функции для работы с событиями
+def get_all_event_keys():
+    """Получение всех ключей событий"""
+    try:
+        keys = []
+        cursor = 0
+        max_iterations = 50  # Ограничим для начала
+        
+        for i in range(max_iterations):
+            cursor, partial_keys = redis_client.scan(cursor, match="events_data:*", count=100)
+            keys.extend(partial_keys)
+            if cursor == 0:
+                break
+                
+        return keys
+        
+    except Exception as e:
+        st.error(f"Error getting event keys: {str(e)}")
+        return []
+
+def get_event_data(key):
+    """Получение данных события"""
+    try:
+        data = redis_client.get(key)
+        if data:
+            return json.loads(data)
+        return None
+    except Exception as e:
+        st.warning(f"Error reading event {key}: {str(e)}")
+        return None
+
+def calculate_token_costs(event):
+    """Расчет стоимости токенов для события"""
+    costs = {
+        'redis_ops': 0,
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'audio_tokens': 0,
+        'cached_tokens': 0,
+        'total': 0
+    }
+    
+    # Стоимость Redis операций
+    if 'redis_ops' in event:
+        costs['redis_ops'] = event['redis_ops'] * 0.0000002
+    
+    # Стоимость поисковых операций (yandex_searches, web_searches, google_searches)
+    search_keys = ['yandex_searches', 'web_searches', 'google_searches']
+    for key in search_keys:
+        if key in event:
+            costs['redis_ops'] += event[key] * 0.0000002  # Такая же стоимость как redis_ops
+    
+    # Стоимость OpenAI токенов
+    if 'openai_usage' in event and event['openai_usage']:
+        for usage in event['openai_usage']:
+            # Audio tokens
+            audio_tokens = 0
+            if 'completion_tokens_details' in usage and 'audio_tokens' in usage['completion_tokens_details']:
+                audio_tokens += usage['completion_tokens_details']['audio_tokens']
+            if 'prompt_tokens_details' in usage and 'audio_tokens' in usage['prompt_tokens_details']:
+                audio_tokens += usage['prompt_tokens_details']['audio_tokens']
+            costs['audio_tokens'] += audio_tokens * 0.00000025
+            
+            # Cached tokens
+            cached_tokens = 0
+            if 'prompt_tokens_details' in usage and 'cached_tokens' in usage['prompt_tokens_details']:
+                cached_tokens = usage['prompt_tokens_details']['cached_tokens']
+            costs['cached_tokens'] += cached_tokens * 0.00000001
+            
+            # Input tokens (prompt_tokens - audio_tokens - cached_tokens)
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            input_tokens = prompt_tokens - audio_tokens - cached_tokens
+            costs['input_tokens'] += max(0, input_tokens) * 0.0000004
+            
+            # Output tokens (completion_tokens - audio_tokens)
+            completion_tokens = usage.get('completion_tokens', 0)
+            output_tokens = completion_tokens - audio_tokens
+            costs['output_tokens'] += max(0, output_tokens) * 0.0000016
+    
+    # Общая стоимость
+    costs['total'] = sum([costs['redis_ops'], costs['input_tokens'], 
+                         costs['output_tokens'], costs['audio_tokens'], costs['cached_tokens']])
+    
+    return costs
+
+def process_events_data():
+    """Обработка данных событий"""
+    st.info("🔄 Loading events data...")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    keys = get_all_event_keys()
+    if not keys:
+        st.warning("No event keys found!")
+        return pd.DataFrame()
+    
+    events_data = []
+    
+    for i, key in enumerate(keys[:1000]):  # Ограничим для теста
+        progress = (i + 1) / min(len(keys), 1000)
+        progress_bar.progress(progress)
+        status_text.text(f"Processing event {i+1}/{min(len(keys), 1000)}")
+        
+        event_data = get_event_data(key)
+        if event_data:
+            event_data['key'] = key
+            events_data.append(event_data)
+        
+        if i % 100 == 0:
+            time.sleep(0.1)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    if not events_data:
+        st.warning("No event data found!")
+        return pd.DataFrame()
+    
+    return pd.DataFrame(events_data)
+
+# Загрузка данных событий
+events_df = process_events_data()
+
+if not events_df.empty:
+    st.subheader("💰 Анализ стоимости токенов")
+    
+    # Расчет стоимости для каждого события
+    costs_data = []
+    for _, event in events_df.iterrows():
+        costs = calculate_token_costs(event)
+        costs['timestamp'] = event.get('timestamp')
+        costs['event_id'] = event.get('event_id')
+        costs['user_id'] = event.get('user_id')
+        costs_data.append(costs)
+    
+    costs_df = pd.DataFrame(costs_data)
+    
+    # Преобразование timestamp в datetime
+    if 'timestamp' in costs_df.columns:
+        costs_df['timestamp'] = pd.to_datetime(costs_df['timestamp'], errors='coerce')
+        costs_df = costs_df.dropna(subset=['timestamp'])
+    
+    if not costs_df.empty:
+        # Группировка по времени
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            cost_time_unit = st.selectbox(
+                "⏰ Единица времени для стоимости",
+                ["Дни", "Недели", "Месяцы"],
+                index=0
+            )
+        
+        # Группировка
+        if cost_time_unit == "Дни":
+            costs_df['time_group'] = costs_df['timestamp'].dt.date
+        elif cost_time_unit == "Недели":
+            costs_df['time_group'] = costs_df['timestamp'].dt.to_period('W').dt.start_time
+        else:  # Месяцы
+            costs_df['time_group'] = costs_df['timestamp'].dt.to_period('M').dt.start_time
+        
+        # Агрегация данных
+        grouped_costs = costs_df.groupby('time_group').agg({
+            'redis_ops': 'sum',
+            'input_tokens': 'sum',
+            'output_tokens': 'sum',
+            'audio_tokens': 'sum',
+            'cached_tokens': 'sum',
+            'total': 'sum'
+        }).reset_index()
+        
+        # Создаем stacked bar chart
+        fig_costs = px.bar(
+            grouped_costs,
+            x='time_group',
+            y=['redis_ops', 'input_tokens', 'output_tokens', 'audio_tokens', 'cached_tokens'],
+            title=f"Стоимость токенов по {cost_time_unit.lower()} ($)",
+            labels={'value': 'Стоимость ($)', 'time_group': 'Дата', 'variable': 'Тип токенов'},
+            color_discrete_map={
+                'redis_ops': '#FF6B6B',
+                'input_tokens': '#4ECDC4',
+                'output_tokens': '#45B7D1',
+                'audio_tokens': '#F9A826',
+                'cached_tokens': '#6A0572'
+            }
+        )
+        
+        # Добавляем общую сумму поверх столбцов
+        fig_costs.add_scatter(
+            x=grouped_costs['time_group'],
+            y=grouped_costs['total'],
+            mode='text',
+            text=grouped_costs['total'].round(4),
+            textposition='top center',
+            showlegend=False,
+            textfont=dict(color='black', size=10)
+        )
+        
+        st.plotly_chart(fig_costs, use_container_width=True)
+        
+        # Детальная статистика
+        st.write("**Детализация стоимости:**")
+        st.dataframe(grouped_costs, use_container_width=True)
+        
+        # Общая статистика
+        total_costs = {
+            'Redis Ops': costs_df['redis_ops'].sum(),
+            'Input Tokens': costs_df['input_tokens'].sum(),
+            'Output Tokens': costs_df['output_tokens'].sum(),
+            'Audio Tokens': costs_df['audio_tokens'].sum(),
+            'Cached Tokens': costs_df['cached_tokens'].sum(),
+            'Total': costs_df['total'].sum()
+        }
+        
+        st.write("**Общая стоимость:**")
+        for key, value in total_costs.items():
+            st.write(f"- {key}: ${value:.6f}")
+            
+    else:
+        st.warning("Нет данных о стоимости для построения графика")
+else:
+    st.info("Данные событий не найдены или пусты")
