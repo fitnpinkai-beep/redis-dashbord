@@ -531,71 +531,99 @@ def get_all_event_keys():
         st.error(f"Error getting event keys: {str(e)}")
         return []
 
+def get_all_event_keys():
+    """Получение всех ключей событий"""
+    try:
+        if not redis_events_client:
+            st.error("Redis Events client not initialized")
+            return []
+            
+        keys = []
+        cursor = 0
+        max_iterations = 50
+        
+        for i in range(max_iterations):
+            cursor, partial_keys = redis_events_client.scan(cursor, match="events_data:*", count=100)
+            keys.extend(partial_keys)
+            if cursor == 0:
+                break
+                
+        return keys
+        
+    except Exception as e:
+        st.error(f"Error getting event keys: {str(e)}")
+        return []
+
 def get_event_data(key):
-    """Получение данных события"""
+    """Получение данных события из Hash"""
     try:
         if not redis_events_client:
             return None
             
-        data = redis_events_client.get(key)
-        if data:
-            return json.loads(data)
+        # Получаем все поля Hash
+        event_data = redis_events_client.hgetall(key)
+        if event_data:
+            # Пробуем распарсить JSON из поля 'value' или других полей
+            if 'value' in event_data:
+                try:
+                    parsed_data = json.loads(event_data['value'])
+                    parsed_data['key'] = key
+                    return parsed_data
+                except:
+                    # Если не JSON, возвращаем как есть
+                    event_data['key'] = key
+                    return event_data
+            else:
+                # Ищем любое поле с JSON данными
+                for field_name, field_value in event_data.items():
+                    if field_name not in ['key', 'timestamp']:  # Пропускаем служебные поля
+                        try:
+                            parsed_data = json.loads(field_value)
+                            parsed_data['key'] = key
+                            return parsed_data
+                        except:
+                            continue
+                
+                # Если не нашли JSON, возвращаем raw данные
+                event_data['key'] = key
+                return event_data
         return None
+        
     except Exception as e:
         st.warning(f"Error reading event {key}: {str(e)}")
         return None
 
-def calculate_token_costs(event):
-    """Расчет стоимости токенов для события"""
-    costs = {
-        'redis_ops': 0,
-        'input_tokens': 0,
-        'output_tokens': 0,
-        'audio_tokens': 0,
-        'cached_tokens': 0,
-        'total': 0
-    }
-    
-    # Стоимость Redis операций
-    if 'redis_ops' in event:
-        costs['redis_ops'] = event['redis_ops'] * 0.0000002
-    
-    # Стоимость поисковых операций
-    search_keys = ['yandex_searches', 'web_searches', 'google_searches']
-    for key in search_keys:
-        if key in event:
-            costs['redis_ops'] += event[key] * 0.0000002
-    
-    # Стоимость OpenAI токенов
-    if 'openai_usage' in event and event['openai_usage']:
-        for usage in event['openai_usage']:
-            # Audio tokens
-            audio_tokens = 0
-            if 'completion_tokens_details' in usage and 'audio_tokens' in usage['completion_tokens_details']:
-                audio_tokens += usage['completion_tokens_details']['audio_tokens']
-            if 'prompt_tokens_details' in usage and 'audio_tokens' in usage['prompt_tokens_details']:
-                audio_tokens += usage['prompt_tokens_details']['audio_tokens']
-            costs['audio_tokens'] += audio_tokens * 0.00000025
+# Альтернативная версия - если данные в отдельных полях Hash
+def get_event_data_alternative(key):
+    """Альтернативный метод получения данных события"""
+    try:
+        if not redis_events_client:
+            return None
             
-            # Cached tokens
-            cached_tokens = 0
-            if 'prompt_tokens_details' in usage and 'cached_tokens' in usage['prompt_tokens_details']:
-                cached_tokens = usage['prompt_tokens_details']['cached_tokens']
-            costs['cached_tokens'] += cached_tokens * 0.00000001
+        # Получаем тип ключа
+        key_type = redis_events_client.type(key)
+        
+        if key_type == 'hash':
+            # Это Hash - получаем все поля
+            event_data = redis_events_client.hgetall(key)
+            event_data['key'] = key
+            return event_data
+        elif key_type == 'string':
+            # Это String - пробуем распарсить JSON
+            data = redis_events_client.get(key)
+            if data:
+                try:
+                    return json.loads(data)
+                except:
+                    return {'raw_data': data, 'key': key}
+        else:
+            return {'key': key, 'type': key_type}
             
-            # Input tokens (prompt_tokens - audio_tokens - cached_tokens)
-            prompt_tokens = usage.get('prompt_tokens', 0)
-            input_tokens = prompt_tokens - audio_tokens - cached_tokens
-            costs['input_tokens'] += max(0, input_tokens) * 0.0000004
-            
-            # Output tokens (completion_tokens - audio_tokens)
-            completion_tokens = usage.get('completion_tokens', 0)
-            output_tokens = completion_tokens - audio_tokens
-            costs['output_tokens'] += max(0, output_tokens) * 0.0000016
-    
-    costs['total'] = sum(costs.values())
-    return costs
+    except Exception as e:
+        st.warning(f"Error reading event {key}: {str(e)}")
+        return None
 
+# Обновленная функция обработки с проверкой типа данных
 def process_events_data():
     """Обработка данных событий"""
     if not redis_events_client:
@@ -612,28 +640,49 @@ def process_events_data():
         return pd.DataFrame()
     
     events_data = []
+    key_types = {}  # Для отладки типов ключей
     
-    for i, key in enumerate(keys[:500]):  # Ограничим для теста
-        progress = (i + 1) / min(len(keys), 500)
+    for i, key in enumerate(keys[:200]):  # Ограничим для теста
+        progress = (i + 1) / min(len(keys), 200)
         progress_bar.progress(progress)
-        status_text.text(f"Processing event {i+1}/{min(len(keys), 500)}")
+        status_text.text(f"Processing event {i+1}/{min(len(keys), 200)}")
         
+        # Проверяем тип ключа
+        try:
+            key_type = redis_events_client.type(key)
+            key_types[key_type] = key_types.get(key_type, 0) + 1
+        except:
+            key_type = 'unknown'
+        
+        # Пробуем оба метода получения данных
         event_data = get_event_data(key)
+        if not event_data:
+            event_data = get_event_data_alternative(key)
+        
         if event_data:
-            event_data['key'] = key
             events_data.append(event_data)
         
-        if i % 50 == 0:
-            time.sleep(0.05)
+        if i % 20 == 0:
+            time.sleep(0.01)
     
     progress_bar.empty()
     status_text.empty()
+    
+    # Покажем статистику по типам ключей
+    st.sidebar.write("**Event Key Types:**", key_types)
     
     if not events_data:
         st.warning("No event data found!")
         return pd.DataFrame()
     
-    return pd.DataFrame(events_data)
+    # Конвертируем в DataFrame
+    try:
+        df_events = pd.DataFrame(events_data)
+        return df_events
+    except Exception as e:
+        st.error(f"Error creating events DataFrame: {str(e)}")
+        st.write("Raw events data sample:", events_data[:3])
+        return pd.DataFrame()
 
 # Загрузка данных событий и анализ стоимости
 if redis_events_client:
@@ -719,3 +768,4 @@ else:
     st.info("Подключение к базе событий не настроено")
 
 st.sidebar.success("✅ Dashboard loaded successfully!")
+
